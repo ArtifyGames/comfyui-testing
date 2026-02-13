@@ -740,21 +740,25 @@ async function loadImageMapForSources(sources) {
   return out;
 }
 
-function drawImageCover(ctx, image, x, y, width, height) {
+function drawImageNative(ctx, image, x, y, width, height) {
   if (!image || !image.width || !image.height) return;
 
-  const scale = Math.max(width / image.width, height / image.height);
-  const drawW = image.width * scale;
-  const drawH = image.height * scale;
+  const drawW = image.width;
+  const drawH = image.height;
   const dx = x + (width - drawW) / 2;
   const dy = y + (height - drawH) / 2;
 
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(x, y, width, height);
-  ctx.clip();
   ctx.drawImage(image, dx, dy, drawW, drawH);
-  ctx.restore();
+}
+
+function buildAxisOffsets(sizes, start = 0) {
+  const offsets = [];
+  let acc = start;
+  for (const size of sizes) {
+    offsets.push(acc);
+    acc += size;
+  }
+  return offsets;
 }
 
 async function buildMatrixExportCanvas(node) {
@@ -766,9 +770,9 @@ async function buildMatrixExportCanvas(node) {
 
   const hasZAxis = axes.hasZAxis;
   const imageColCount = axes.xCount * (hasZAxis ? axes.zCount : 1);
-  const cellSize = Math.max(32, getAutoCellSize(node));
   const batchIndex = 0;
   const yColWidth = Y_LABEL_COL_WIDTH;
+  const defaultMissingCellSize = 128;
 
   const cellEntries = [];
   for (let iy = 0; iy < axes.yCount; iy += 1) {
@@ -802,6 +806,23 @@ async function buildMatrixExportCanvas(node) {
 
   const imageMap = await loadImageMapForSources(cellEntries.map((entry) => entry.src));
   const cellByKey = new Map(cellEntries.map((entry) => [`${entry.row}:${entry.col}`, entry]));
+  const colWidths = Array.from({ length: imageColCount }, () => defaultMissingCellSize);
+  const rowHeights = Array.from({ length: axes.yCount }, () => defaultMissingCellSize);
+
+  for (let row = 0; row < axes.yCount; row += 1) {
+    for (let col = 0; col < imageColCount; col += 1) {
+      const cell = cellByKey.get(`${row}:${col}`);
+      const image = imageMap.get(cell?.src || "") || null;
+      if (!image || !image.width || !image.height) continue;
+      colWidths[col] = Math.max(colWidths[col], image.width);
+      rowHeights[row] = Math.max(rowHeights[row], image.height);
+    }
+  }
+
+  const colOffsets = buildAxisOffsets(colWidths, yColWidth);
+  const rowOffsets = buildAxisOffsets(rowHeights, 0);
+  const bodyWidth = colWidths.reduce((sum, value) => sum + value, 0);
+  const bodyHeight = rowHeights.reduce((sum, value) => sum + value, 0);
 
   const pad = 12;
   const legendPadBottom = 8;
@@ -813,12 +834,12 @@ async function buildMatrixExportCanvas(node) {
   const measureCtx = measureCanvas.getContext("2d");
   measureCtx.font = "12px sans-serif";
   const legendParts = collectLegendParts(data);
-  const tableWidth = yColWidth + imageColCount * cellSize;
+  const tableWidth = yColWidth + bodyWidth;
   const legendLines = wrapLegendLines(measureCtx, legendParts, Math.max(200, tableWidth));
   const legendLineH = 16;
   const legendHeight = legendLines.length ? legendLines.length * legendLineH + 2 : 0;
 
-  const tableHeight = headTotalH + axes.yCount * cellSize;
+  const tableHeight = headTotalH + bodyHeight;
   const canvas = document.createElement("canvas");
   canvas.width = pad * 2 + tableWidth;
   canvas.height = pad * 2 + legendHeight + (legendHeight ? legendPadBottom : 0) + tableHeight;
@@ -864,8 +885,12 @@ async function buildMatrixExportCanvas(node) {
     drawCenterText("Y \\ X/Z", tableX, tableY, yColWidth, headTotalH, yColWidth - 10);
 
     for (let ix = 0; ix < axes.xCount; ix += 1) {
-      const x = tableX + yColWidth + ix * axes.zCount * cellSize;
-      const w = axes.zCount * cellSize;
+      const startCol = ix * axes.zCount;
+      const x = tableX + colOffsets[startCol];
+      let w = 0;
+      for (let iz = 0; iz < axes.zCount; iz += 1) {
+        w += colWidths[startCol + iz] || defaultMissingCellSize;
+      }
       drawCellBox(x, tableY, w, headH1, headerBg);
       drawCenterText(`X=${String(data.result[ix]?.value ?? `x${ix}`)}`, x, tableY, w, headH1, w - 10);
     }
@@ -873,10 +898,12 @@ async function buildMatrixExportCanvas(node) {
     for (let ix = 0; ix < axes.xCount; ix += 1) {
       const firstCell = data.result[ix]?.children?.[0]?.children || [];
       for (let iz = 0; iz < axes.zCount; iz += 1) {
-        const x = tableX + yColWidth + (ix * axes.zCount + iz) * cellSize;
+        const col = ix * axes.zCount + iz;
+        const x = tableX + colOffsets[col];
+        const w = colWidths[col] || defaultMissingCellSize;
         const zNode = firstCell[iz];
-        drawCellBox(x, tableY + headH1, cellSize, headH2, headerBg);
-        drawCenterText(`Z=${String(zNode?.value ?? `z${iz}`)}`, x, tableY + headH1, cellSize, headH2, cellSize - 8);
+        drawCellBox(x, tableY + headH1, w, headH2, headerBg);
+        drawCenterText(`Z=${String(zNode?.value ?? `z${iz}`)}`, x, tableY + headH1, w, headH2, w - 8);
       }
     }
   } else {
@@ -884,33 +911,36 @@ async function buildMatrixExportCanvas(node) {
     drawCenterText("Y \\ X", tableX, tableY, yColWidth, headH1, yColWidth - 10);
 
     for (let ix = 0; ix < axes.xCount; ix += 1) {
-      const x = tableX + yColWidth + ix * cellSize;
-      drawCellBox(x, tableY, cellSize, headH1, headerBg);
-      drawCenterText(`X=${String(data.result[ix]?.value ?? `x${ix}`)}`, x, tableY, cellSize, headH1, cellSize - 8);
+      const x = tableX + colOffsets[ix];
+      const w = colWidths[ix] || defaultMissingCellSize;
+      drawCellBox(x, tableY, w, headH1, headerBg);
+      drawCenterText(`X=${String(data.result[ix]?.value ?? `x${ix}`)}`, x, tableY, w, headH1, w - 8);
     }
   }
 
   ctx.font = "11px sans-serif";
   for (let iy = 0; iy < axes.yCount; iy += 1) {
-    const y = tableY + headTotalH + iy * cellSize;
-    drawCellBox(tableX, y, yColWidth, cellSize, headerBg);
-    drawCenterText(`Y=${String(data.result[0]?.children?.[iy]?.value ?? `y${iy}`)}`, tableX, y, yColWidth, cellSize, yColWidth - 10);
+    const y = tableY + headTotalH + rowOffsets[iy];
+    const h = rowHeights[iy] || defaultMissingCellSize;
+    drawCellBox(tableX, y, yColWidth, h, headerBg);
+    drawCenterText(`Y=${String(data.result[0]?.children?.[iy]?.value ?? `y${iy}`)}`, tableX, y, yColWidth, h, yColWidth - 10);
 
     for (let col = 0; col < imageColCount; col += 1) {
-      const x = tableX + yColWidth + col * cellSize;
-      drawCellBox(x, y, cellSize, cellSize, cellBg);
+      const x = tableX + colOffsets[col];
+      const w = colWidths[col] || defaultMissingCellSize;
+      drawCellBox(x, y, w, h, cellBg);
 
       const cell = cellByKey.get(`${iy}:${col}`);
       const image = imageMap.get(cell?.src || "") || null;
       if (image) {
-        drawImageCover(ctx, image, x + 1, y + 1, cellSize - 2, cellSize - 2);
+        drawImageNative(ctx, image, x + 1, y + 1, w - 2, h - 2);
       } else {
         ctx.fillStyle = missingBg;
-        ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+        ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
         ctx.fillStyle = missingText;
         const missing = "Missing";
         const metrics = ctx.measureText(missing);
-        ctx.fillText(missing, x + (cellSize - metrics.width) / 2, y + cellSize / 2 + 4);
+        ctx.fillText(missing, x + (w - metrics.width) / 2, y + h / 2 + 4);
       }
     }
   }
@@ -927,17 +957,37 @@ async function buildFlatExportCanvas(node) {
   const sources = images.map((item) => String(item?.src || "").trim()).filter(Boolean);
   const imageMap = await loadImageMapForSources(sources);
 
-  const cellSize = Math.max(48, getAutoCellSize(node));
   const cols = Math.max(1, Math.ceil(Math.sqrt(images.length)));
   const rows = Math.max(1, Math.ceil(images.length / cols));
   const gap = 8;
   const pad = 12;
   const labelH = 24;
-  const tileH = cellSize + labelH;
+  const defaultMissingCellSize = 128;
+
+  const colWidths = Array.from({ length: cols }, () => defaultMissingCellSize);
+  const rowHeights = Array.from({ length: rows }, () => defaultMissingCellSize);
+  for (let index = 0; index < images.length; index += 1) {
+    const item = images[index];
+    const row = Math.floor(index / cols);
+    const col = index % cols;
+    const src = String(item?.src || "").trim();
+    const image = imageMap.get(src) || null;
+    if (!image || !image.width || !image.height) continue;
+    colWidths[col] = Math.max(colWidths[col], image.width);
+    rowHeights[row] = Math.max(rowHeights[row], image.height);
+  }
+
+  const colOffsets = buildAxisOffsets(colWidths, 0);
+  const rowOffsets = buildAxisOffsets(
+    rowHeights.map((height) => height + labelH),
+    0,
+  );
+  const bodyWidth = colWidths.reduce((sum, value) => sum + value, 0);
+  const bodyHeight = rowHeights.reduce((sum, value) => sum + value + labelH, 0);
 
   const canvas = document.createElement("canvas");
-  canvas.width = pad * 2 + cols * cellSize + (cols - 1) * gap;
-  canvas.height = pad * 2 + rows * tileH + (rows - 1) * gap;
+  canvas.width = pad * 2 + bodyWidth + (cols - 1) * gap;
+  canvas.height = pad * 2 + bodyHeight + (rows - 1) * gap;
 
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = "#1f1f1f";
@@ -947,35 +997,38 @@ async function buildFlatExportCanvas(node) {
     const item = images[index];
     const row = Math.floor(index / cols);
     const col = index % cols;
-    const x = pad + col * (cellSize + gap);
-    const y = pad + row * (tileH + gap);
+    const cellW = colWidths[col] || defaultMissingCellSize;
+    const cellH = rowHeights[row] || defaultMissingCellSize;
+    const tileH = cellH + labelH;
+    const x = pad + colOffsets[col] + col * gap;
+    const y = pad + rowOffsets[row] + row * gap;
 
     ctx.fillStyle = "#262626";
-    ctx.fillRect(x, y, cellSize, tileH);
+    ctx.fillRect(x, y, cellW, tileH);
     ctx.strokeStyle = "#444444";
     ctx.lineWidth = 1;
-    ctx.strokeRect(x + 0.5, y + 0.5, cellSize - 1, tileH - 1);
+    ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, tileH - 1);
 
     const src = String(item?.src || "").trim();
     const image = imageMap.get(src) || null;
     if (image) {
-      drawImageCover(ctx, image, x + 1, y + 1, cellSize - 2, cellSize - 2);
+      drawImageNative(ctx, image, x + 1, y + 1, cellW - 2, cellH - 2);
     } else {
       ctx.fillStyle = "#1d1d1d";
-      ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+      ctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
       ctx.fillStyle = "#9a9a9a";
       ctx.font = "11px sans-serif";
       const missing = "Missing";
       const metrics = ctx.measureText(missing);
-      ctx.fillText(missing, x + (cellSize - metrics.width) / 2, y + cellSize / 2 + 4);
+      ctx.fillText(missing, x + (cellW - metrics.width) / 2, y + cellH / 2 + 4);
     }
 
     ctx.fillStyle = "#262626";
-    ctx.fillRect(x, y + cellSize, cellSize, labelH);
+    ctx.fillRect(x, y + cellH, cellW, labelH);
     ctx.fillStyle = "#bbbbbb";
     ctx.font = "11px sans-serif";
-    const label = ellipsizeText(ctx, String(item?.name || ""), cellSize - 10);
-    ctx.fillText(label, x + 5, y + cellSize + 16);
+    const label = ellipsizeText(ctx, String(item?.name || ""), cellW - 10);
+    ctx.fillText(label, x + 5, y + cellH + 16);
   }
 
   return canvas;
