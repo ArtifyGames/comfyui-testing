@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import requests
 import torch
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image
 from requests.adapters import HTTPAdapter, Retry
 
 import folder_paths
@@ -366,93 +366,6 @@ def _infer_plot_meta_from_filenames(folder_path: str) -> dict[str, Any]:
         "z_slots": z_slots,
         "batch_size": max(batches) + 1 if batches else 1,
     }
-
-
-def _load_cell_image(folder_path: str, ix: int, iy: int, z_slot: int, batch_index: int) -> Image.Image | None:
-    filename = _image_filename(ix, iy, z_slot, batch_index)
-    image_path = os.path.join(folder_path, filename)
-    if not os.path.exists(image_path):
-        return None
-    with Image.open(image_path) as img:
-        return img.convert("RGB")
-
-
-def _render_grid(
-    folder_name: str,
-    folder_path: str,
-    plot_meta: dict[str, Any],
-    z_index: int,
-    batch_index: int,
-    cell_size: int,
-    padding: int,
-    show_labels: bool,
-) -> Image.Image:
-    values_x = plot_meta["values_x"]
-    values_y = plot_meta["values_y"]
-    values_z = plot_meta["values_z"]
-    z_slots = plot_meta["z_slots"]
-    max_batch = max(1, int(plot_meta["batch_size"]))
-
-    if not values_x or not values_y:
-        raise ValueError("No axis values found in this XYZ folder.")
-
-    z_index = max(0, min(z_index, len(z_slots) - 1))
-    batch_index = max(0, min(batch_index, max_batch - 1))
-    z_slot = z_slots[z_index]
-
-    left_width = 170 if show_labels else padding
-    top_height = 64 if show_labels else padding
-
-    cols = len(values_x)
-    rows = len(values_y)
-
-    canvas_w = left_width + padding + cols * (cell_size + padding)
-    canvas_h = top_height + padding + rows * (cell_size + padding) + 28
-
-    canvas = Image.new("RGB", (canvas_w, canvas_h), color=(19, 23, 27))
-    draw = ImageDraw.Draw(canvas)
-
-    for ix in range(cols):
-        for iy in range(rows):
-            x0 = left_width + padding + ix * (cell_size + padding)
-            y0 = top_height + padding + iy * (cell_size + padding)
-            x1 = x0 + cell_size
-            y1 = y0 + cell_size
-
-            draw.rounded_rectangle([x0, y0, x1, y1], radius=8, fill=(33, 38, 44), outline=(56, 64, 74), width=1)
-
-            image = _load_cell_image(folder_path, ix, iy, z_slot, batch_index)
-            if image is None:
-                draw.line([x0 + 8, y0 + 8, x1 - 8, y1 - 8], fill=(170, 80, 80), width=2)
-                draw.line([x1 - 8, y0 + 8, x0 + 8, y1 - 8], fill=(170, 80, 80), width=2)
-                continue
-
-            thumb = ImageOps.pad(image, (cell_size, cell_size), color=(26, 30, 35), method=Image.Resampling.LANCZOS)
-            canvas.paste(thumb, (x0, y0))
-
-    if show_labels:
-        for ix, value in enumerate(values_x):
-            x_center = left_width + padding + ix * (cell_size + padding) + cell_size // 2
-            draw.text((x_center - (len(value) * 3), 20), value, fill=(215, 222, 230))
-
-        for iy, value in enumerate(values_y):
-            y_center = top_height + padding + iy * (cell_size + padding) + cell_size // 2
-            draw.text((12, y_center - 6), value, fill=(215, 222, 230))
-
-    z_label = values_z[z_index] if values_z else "(none)"
-    footer = f"Folder: {folder_name} | Batch: {batch_index} | Z: {z_label}"
-    draw.text((12, canvas_h - 18), footer, fill=(160, 170, 182))
-
-    return canvas
-
-
-def _pil_to_image_tensor(image: Image.Image) -> torch.Tensor:
-    arr = np.asarray(image).astype(np.float32) / 255.0
-    return torch.from_numpy(arr).unsqueeze(0)
-
-
-def _empty_image_tensor() -> torch.Tensor:
-    return torch.zeros((1, 1, 1, 3), dtype=torch.float32)
 
 
 class ArtifySelectInputs(io.ComfyNode):

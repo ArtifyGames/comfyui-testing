@@ -47,8 +47,9 @@ Restart ComfyUI and refresh the browser page.
 
 In `XYZ Viewer (Artify)`:
 
-- Set `source_mode` to `load_folder`.
-- Use `Load Folder` to pick a local folder in-browser, or set `folder_name` to load from ComfyUI output.
+- Use `Load Folder` to pick a local folder in-browser.
+- The viewer also auto-loads folders produced by connected `XYZ Plot (Artify)` runs.
+- Use `Export Grid Image` to save a merged grid image with headers/legend.
 
 If the folder contains `result.json`, the viewer renders the labeled matrix.
 If not, it renders a simple image grid.

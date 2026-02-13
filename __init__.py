@@ -4,7 +4,7 @@ from comfy_api.latest import ComfyExtension, io
 import server
 
 from .nodes import ArtifySelectInputs, ArtifyXYZPlot, ArtifyXYZViewer
-from .routes import api_get_xyz_images, api_get_xyz_result, api_list_xyz_folders
+from .routes import api_get_xyz_images, api_get_xyz_result
 
 WEB_DIRECTORY = "./web"
 
@@ -14,12 +14,6 @@ def _register_routes() -> None:
     if prompt_server is None:
         return
 
-    # Register a lightweight route used by the viewer's "Load Folder" button.
-    try:
-        prompt_server.routes.get("/artify_testing/xyz/folders")(api_list_xyz_folders)
-    except Exception:
-        # Route is already registered (e.g. module reload).
-        pass
     try:
         prompt_server.routes.get("/artify_testing/xyz/result")(api_get_xyz_result)
     except Exception:

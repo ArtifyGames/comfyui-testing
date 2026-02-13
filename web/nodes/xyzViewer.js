@@ -301,16 +301,8 @@ function getAxesInfo(data) {
 
   const firstCell = yCount > 0 && Array.isArray(yRows[0]?.children) ? yRows[0].children : [];
   const hasZAxis = firstCell.length > 0 && firstCell[0]?.type === "axis";
-
   const zCount = hasZAxis ? firstCell.length : 1;
-  const firstImages = hasZAxis
-    ? Array.isArray(firstCell[0]?.children)
-      ? firstCell[0].children
-      : []
-    : firstCell;
-  const batchCount = Math.max(1, firstImages.length || 1);
-
-  return { xCount, yCount, zCount, batchCount, hasZAxis };
+  return { xCount, yCount, zCount, hasZAxis };
 }
 
 function getAxisAnnotation(data, axisLetter) {
@@ -1144,7 +1136,6 @@ async function applyLocalFiles(node, files, folderLabel) {
   const localFiles = Array.isArray(files) ? files : [];
   const imagesOnly = localFiles.filter((file) => isImageName(file?.name)).sort(sortByName);
 
-  node.artifyLastLocalFiles = localFiles;
   buildLocalImageMap(node, imagesOnly);
 
   const resultJson = await parseResultJsonFromFiles(localFiles);
@@ -1173,7 +1164,6 @@ async function loadServerFolder(node, folderName) {
     return false;
   }
 
-  node.artifyLastLocalFiles = [];
   revokeObjectUrls(node);
   node.artifyLocalImageMap = new Map();
 
@@ -1310,7 +1300,6 @@ app.registerExtension({
 
       this.artifyObjectUrls = [];
       this.artifyLocalImageMap = new Map();
-      this.artifyLastLocalFiles = [];
       this.artifyLoadedFolder = "";
       this.artifyViewMode = "flat";
       this.artifyFlatImages = [];

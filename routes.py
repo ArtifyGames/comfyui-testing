@@ -14,27 +14,6 @@ def _sanitize_folder_name(name: str) -> str:
     return value
 
 
-async def api_list_xyz_folders(request):
-    output_dir = folder_paths.get_output_directory()
-    folders = []
-
-    for entry in os.scandir(output_dir):
-        if not entry.is_dir():
-            continue
-        if not os.path.exists(os.path.join(entry.path, "result.json")):
-            continue
-
-        folders.append(
-            {
-                "name": entry.name,
-                "mtime": entry.stat().st_mtime,
-            }
-        )
-
-    folders.sort(key=lambda x: x["mtime"], reverse=True)
-    return web.json_response({"folders": [f["name"] for f in folders]})
-
-
 async def api_get_xyz_result(request):
     folder_name = _sanitize_folder_name(request.query.get("folder_name", ""))
     if not folder_name:
