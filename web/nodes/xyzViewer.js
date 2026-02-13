@@ -1289,6 +1289,126 @@ function createViewerContainer() {
   return { root, status, legend, content };
 }
 
+function getGraphCanvasElement() {
+  const fromApp = app?.canvas?.canvas;
+  if (fromApp instanceof HTMLCanvasElement) {
+    return fromApp;
+  }
+
+  const fromDom = document.querySelector("#graph-canvas, .litegraph canvas");
+  return fromDom instanceof HTMLCanvasElement ? fromDom : null;
+}
+
+function setupMiddleMousePanPassthrough(rootEl) {
+  if (!(rootEl instanceof HTMLElement)) {
+    return () => {};
+  }
+
+  let activePointerId = null;
+
+  const restorePointerPassthrough = () => {
+    activePointerId = null;
+    if (rootEl.style.pointerEvents === "none") {
+      rootEl.style.pointerEvents = "";
+    }
+    window.removeEventListener("pointerup", handlePointerDone, true);
+    window.removeEventListener("pointercancel", handlePointerDone, true);
+    window.removeEventListener("mouseup", handleMouseDone, true);
+    window.removeEventListener("blur", handleMouseDone, true);
+  };
+
+  const handlePointerDone = (event) => {
+    if (activePointerId == null || event?.pointerId === activePointerId) {
+      restorePointerPassthrough();
+    }
+  };
+
+  const handleMouseDone = () => {
+    restorePointerPassthrough();
+  };
+
+  const forwardMiddlePointerDown = (event) => {
+    if (event.button !== 1) return;
+
+    const canvasEl = getGraphCanvasElement();
+    if (!canvasEl) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    activePointerId = Number.isFinite(event.pointerId) ? event.pointerId : null;
+    rootEl.style.pointerEvents = "none";
+    window.addEventListener("pointerup", handlePointerDone, true);
+    window.addEventListener("pointercancel", handlePointerDone, true);
+    window.addEventListener("mouseup", handleMouseDone, true);
+    window.addEventListener("blur", handleMouseDone, true);
+
+    const graphCanvas = app?.canvas;
+    if (graphCanvas && typeof graphCanvas.processMouseDown === "function") {
+      graphCanvas.processMouseDown.call(graphCanvas, event);
+      return;
+    }
+
+    if (typeof PointerEvent === "function") {
+      canvasEl.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          pointerId: event.pointerId,
+          pointerType: event.pointerType || "mouse",
+          isPrimary: event.isPrimary,
+          screenX: event.screenX,
+          screenY: event.screenY,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          ctrlKey: event.ctrlKey,
+          shiftKey: event.shiftKey,
+          altKey: event.altKey,
+          metaKey: event.metaKey,
+          button: 1,
+          buttons: event.buttons || 4,
+          pressure: event.pressure ?? 0.5,
+        }),
+      );
+      return;
+    }
+
+    canvasEl.dispatchEvent(
+      new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        screenX: event.screenX,
+        screenY: event.screenY,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+        button: 1,
+        buttons: event.buttons || 4,
+      }),
+    );
+  };
+
+  const blockMiddleAuxClick = (event) => {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  rootEl.addEventListener("pointerdown", forwardMiddlePointerDown, true);
+  rootEl.addEventListener("auxclick", blockMiddleAuxClick, true);
+
+  return () => {
+    restorePointerPassthrough();
+    rootEl.removeEventListener("pointerdown", forwardMiddlePointerDown, true);
+    rootEl.removeEventListener("auxclick", blockMiddleAuxClick, true);
+  };
+}
+
 app.registerExtension({
   name: "ArtifyTesting.XYZViewer",
   async beforeRegisterNodeDef(nodeType, nodeData) {
@@ -1319,6 +1439,10 @@ app.registerExtension({
         });
 
         this.artifyDomWidget.computeSize = (width) => [Math.max(500, width), 440];
+      }
+
+      if (!this.artifyPanPassthroughCleanup && this.artifyRootEl) {
+        this.artifyPanPassthroughCleanup = setupMiddleMousePanPassthrough(this.artifyRootEl);
       }
 
       if (!this.artifyResizeObserver && typeof ResizeObserver !== "undefined") {
@@ -1375,6 +1499,10 @@ app.registerExtension({
       if (this._artifyResizeRaf != null) {
         cancelAnimationFrame(this._artifyResizeRaf);
         this._artifyResizeRaf = null;
+      }
+      if (typeof this.artifyPanPassthroughCleanup === "function") {
+        this.artifyPanPassthroughCleanup();
+        this.artifyPanPassthroughCleanup = null;
       }
       revokeObjectUrls(this);
       return originalOnRemoved?.apply(this, arguments);
