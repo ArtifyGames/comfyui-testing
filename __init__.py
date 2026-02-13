@@ -3,7 +3,7 @@ from comfy_api.latest import ComfyExtension, io
 
 import server
 
-from .nodes import ArtifySelectInputs, ArtifyXYZPlot, ArtifyXYZViewer
+from .nodes import ArtifyXYZPlot, ArtifyXYZViewer
 from .routes import api_get_xyz_images, api_get_xyz_result
 
 WEB_DIRECTORY = "./web"
@@ -33,7 +33,6 @@ class ComfyUITestingExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
         return [
-            ArtifySelectInputs,
             ArtifyXYZPlot,
             ArtifyXYZViewer,
         ]

@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import time
+from datetime import datetime
 from typing import Any
 
 import numpy as np
@@ -17,11 +18,14 @@ import folder_paths
 from comfy.cli_args import args
 from comfy_api.latest import io
 
-INPUT_REF = io.Custom("INPUT")
 XYZ_PLOT_DATA = io.Custom("ARTIFY_XYZ_PLOT")
 
 CATEGORY = "Artify/Testing"
 SPLITTER = "::"
+DEFAULT_OUTPUT_FOLDER_TEMPLATE = (
+    "%date:yyMMdd%_X_%inputx_node_title%_%inputx_widget_name%_Y_%inputy_node_title%_%inputy_widget_name%_Z_%inputz_node_title%_%inputz_widget_name%"
+)
+DATE_TOKEN_PATTERN = re.compile(r"%date:([^%]+)%")
 
 
 def _server_base_url() -> str:
@@ -48,6 +52,100 @@ def _sanitize_folder_name(name: str) -> str:
     if not clean:
         clean = "xyz_plot_artify"
     return clean
+
+
+def _sanitize_template_component(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", text)
+    text = re.sub(r"\s+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text
+
+
+def _format_custom_date(pattern: str, now: datetime) -> str:
+    # Supports common SaveImage-style date tokens such as yyMMdd or yyyy-MM-dd_HH-mm-ss.
+    token_values = {
+        "yyyy": f"{now.year:04d}",
+        "yy": f"{now.year % 100:02d}",
+        "MM": f"{now.month:02d}",
+        "M": str(now.month),
+        "dd": f"{now.day:02d}",
+        "d": str(now.day),
+        "HH": f"{now.hour:02d}",
+        "H": str(now.hour),
+        "mm": f"{now.minute:02d}",
+        "m": str(now.minute),
+        "ss": f"{now.second:02d}",
+        "s": str(now.second),
+    }
+    ordered_tokens = sorted(token_values.keys(), key=len, reverse=True)
+
+    out: list[str] = []
+    idx = 0
+    while idx < len(pattern):
+        matched = False
+        for token in ordered_tokens:
+            if pattern.startswith(token, idx):
+                out.append(token_values[token])
+                idx += len(token)
+                matched = True
+                break
+        if matched:
+            continue
+        out.append(pattern[idx])
+        idx += 1
+    return "".join(out)
+
+
+def _expand_output_folder_template(
+    template: str,
+    axis_x: dict[str, str] | None,
+    axis_y: dict[str, str] | None,
+    axis_z: dict[str, str] | None,
+) -> str:
+    raw = str(template or "").strip() or DEFAULT_OUTPUT_FOLDER_TEMPLATE
+    if axis_z is None:
+        # Remove the canonical Z suffix block when Z axis is not used.
+        raw = raw.replace("_Z_%inputz_node_title%_%inputz_widget_name%", "")
+        raw = raw.replace("Z_%inputz_node_title%_%inputz_widget_name%", "")
+    now = datetime.now()
+
+    def _replace_date(match: re.Match[str]) -> str:
+        fmt = str(match.group(1) or "").strip()
+        if not fmt:
+            return ""
+        return _format_custom_date(fmt, now)
+
+    out = DATE_TOKEN_PATTERN.sub(_replace_date, raw)
+    out = (
+        out.replace("%year%", f"{now.year:04d}")
+        .replace("%month%", f"{now.month:02d}")
+        .replace("%day%", f"{now.day:02d}")
+        .replace("%hour%", f"{now.hour:02d}")
+        .replace("%minute%", f"{now.minute:02d}")
+        .replace("%second%", f"{now.second:02d}")
+    )
+
+    replacements = {
+        "inputx_node_title": _sanitize_template_component(axis_x.get("node_title")) if axis_x else "",
+        "inputx_widget_name": _sanitize_template_component(axis_x.get("widget_name")) if axis_x else "",
+        "inputy_node_title": _sanitize_template_component(axis_y.get("node_title")) if axis_y else "",
+        "inputy_widget_name": _sanitize_template_component(axis_y.get("widget_name")) if axis_y else "",
+        "inputz_node_title": _sanitize_template_component(axis_z.get("node_title")) if axis_z else "",
+        "inputz_widget_name": _sanitize_template_component(axis_z.get("widget_name")) if axis_z else "",
+    }
+    for token, value in replacements.items():
+        out = out.replace(f"%{token}%", value)
+
+    out = out.replace("\\", "/")
+    out = re.sub(r"\s+", "_", out)
+    out = re.sub(r"_+", "_", out)
+    out = re.sub(r"/+", "/", out)
+    out = re.sub(r"_*/_*", "/", out)
+    out = out.strip(" _/")
+    return _sanitize_folder_name(out)
 
 
 def _split_values(raw: str) -> list[str]:
@@ -368,54 +466,6 @@ def _infer_plot_meta_from_filenames(folder_path: str) -> dict[str, Any]:
     }
 
 
-class ArtifySelectInputs(io.ComfyNode):
-    @classmethod
-    def define_schema(cls) -> io.Schema:
-        return io.Schema(
-            node_id="ArtifySelectInputs",
-            display_name="Select Inputs (Artify)",
-            category=CATEGORY,
-            description="Select any widget inputs in your graph to drive XYZ Plot axes.",
-            inputs=[
-                io.Combo.Input("input_1", options=["none"], default="none"),
-                io.Combo.Input("input_2", options=["none"], default="none"),
-                io.Combo.Input("input_3", options=["none"], default="none"),
-                io.Combo.Input("input_4", options=["none"], default="none"),
-                io.String.Input("preview", multiline=True, default=""),
-            ],
-            outputs=[
-                INPUT_REF.Output("input_1"),
-                INPUT_REF.Output("input_2"),
-                INPUT_REF.Output("input_3"),
-                INPUT_REF.Output("input_4"),
-            ],
-            search_aliases=["select inputs", "xyz inputs", "input selector"],
-        )
-
-    @classmethod
-    def execute(
-        cls,
-        input_1: str,
-        input_2: str,
-        input_3: str,
-        input_4: str,
-        preview: str,
-    ) -> io.NodeOutput:
-        refs = [
-            _parse_input_ref(input_1),
-            _parse_input_ref(input_2),
-            _parse_input_ref(input_3),
-            _parse_input_ref(input_4),
-        ]
-        return io.NodeOutput(*refs)
-
-    @classmethod
-    def validate_inputs(cls, **kwargs) -> bool:
-        # input_* combo options are populated client-side from the live graph.
-        # Accept values beyond the static schema default ["none"].
-        return True
-
-
 class ArtifyXYZPlot(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -429,28 +479,29 @@ class ArtifyXYZPlot(io.ComfyNode):
             ),
             inputs=[
                 io.Image.Input("images"),
-                INPUT_REF.Input("input_x"),
-                INPUT_REF.Input("input_y"),
+                io.String.Input("output_folder_name", default=DEFAULT_OUTPUT_FOLDER_TEMPLATE),
+                io.Combo.Input("input_x", options=["none"], default="none"),
                 io.String.Input(
                     "value_x",
                     multiline=True,
-                    placeholder='Values separated by semicolon, e.g. "A; B; C"',
+                    placeholder="6.5; 7.0; 7.5",
+                    default="6.5; 7.0; 7.5",
                 ),
+                io.Combo.Input("input_y", options=["none"], default="none"),
                 io.String.Input(
                     "value_y",
                     multiline=True,
-                    placeholder='Values separated by semicolon, e.g. "A; B; C"',
+                    placeholder="20; 30; 40",
+                    default="20; 30; 40",
                 ),
+                io.Combo.Input("input_z", options=["none"], default="none", optional=True),
                 io.String.Input(
                     "value_z",
                     multiline=True,
-                    default="",
-                    placeholder='Optional values separated by semicolon, e.g. "A; B; C"',
+                    placeholder="Euler; Heun",
+                    default="Euler; Heun",
                     optional=True,
                 ),
-                INPUT_REF.Input("input_z", optional=True),
-                io.String.Input("output_folder_name", default="xyz_plot_artify"),
-                io.Boolean.Input("archive_existing", default=True),
             ],
             outputs=[
                 XYZ_PLOT_DATA.Output("xyz_plot"),
@@ -467,16 +518,21 @@ class ArtifyXYZPlot(io.ComfyNode):
         return time.time_ns()
 
     @classmethod
+    def validate_inputs(cls, **kwargs) -> bool:
+        # input_x/y/z combo options are populated client-side from the live graph.
+        # Accept values beyond the static schema default ["none"].
+        return True
+
+    @classmethod
     def execute(
         cls,
         images: torch.Tensor,
-        input_x: dict[str, str],
-        input_y: dict[str, str],
-        value_x: str,
-        value_y: str,
         output_folder_name: str,
-        archive_existing: bool = True,
-        input_z: dict[str, str] | None = None,
+        input_x: str,
+        value_x: str,
+        input_y: str,
+        value_y: str,
+        input_z: str = "none",
         value_z: str = "",
     ) -> io.NodeOutput:
         folder_name = _sanitize_folder_name(output_folder_name)
@@ -505,8 +561,12 @@ class ArtifyXYZPlot(io.ComfyNode):
                 }
                 return io.NodeOutput(plot_data)
 
-        if not isinstance(input_x, dict) or not isinstance(input_y, dict):
-            raise ValueError("input_x and input_y must be valid INPUT references. Use Select Inputs (Artify).")
+        axis_x = _parse_input_ref(input_x)
+        axis_y = _parse_input_ref(input_y)
+        axis_z = _parse_input_ref(input_z)
+
+        if not axis_x or not axis_y:
+            raise ValueError("input_x and input_y must be selected to valid graph widget references.")
 
         values_x = _split_values(value_x)
         values_y = _split_values(value_y)
@@ -514,9 +574,14 @@ class ArtifyXYZPlot(io.ComfyNode):
 
         if not values_x or not values_y:
             raise ValueError("value_x and value_y must each contain at least one semicolon-separated value.")
+        if values_z and axis_z is None:
+            raise ValueError("value_z was provided, but input_z is not selected.")
+
+        effective_values_z = values_z if axis_z is not None else []
+        folder_name = _expand_output_folder_template(output_folder_name, axis_x, axis_y, axis_z if effective_values_z else None)
 
         output_folder = _output_folder_path(folder_name)
-        if archive_existing and os.path.exists(output_folder):
+        if os.path.exists(output_folder):
             backup_name = f"{output_folder}_old_{int(time.time())}"
             shutil.move(output_folder, backup_name)
 
@@ -526,7 +591,7 @@ class ArtifyXYZPlot(io.ComfyNode):
             folder_name=folder_name,
             values_x=values_x,
             values_y=values_y,
-            values_z=values_z,
+            values_z=effective_values_z,
             batch_size=batch_size,
         )
 
@@ -537,10 +602,10 @@ class ArtifyXYZPlot(io.ComfyNode):
             "values": {
                 "x": values_x,
                 "y": values_y,
-                "z": values_z,
+                "z": effective_values_z,
             },
             "batch_size": batch_size,
-            "annotations": _build_annotations(input_x, input_y, input_z),
+            "annotations": _build_annotations(axis_x, axis_y, axis_z if effective_values_z else None),
             "result": result_tree,
         }
 
@@ -569,16 +634,16 @@ class ArtifyXYZPlot(io.ComfyNode):
         viewer_node_ids = _find_viewer_node_ids(prompt, unique_id)
 
         queued = 0
-        has_z = isinstance(input_z, dict) and len(values_z) > 0
+        has_z = len(effective_values_z) > 0
 
         for ix, vx in enumerate(values_x):
             for iy, vy in enumerate(values_y):
                 if has_z:
-                    for iz, vz in enumerate(values_z):
+                    for iz, vz in enumerate(effective_values_z):
                         new_prompt = copy.deepcopy(prompt)
-                        _set_axis_value(new_prompt, input_x, vx)
-                        _set_axis_value(new_prompt, input_y, vy)
-                        _set_axis_value(new_prompt, input_z, vz)
+                        _set_axis_value(new_prompt, axis_x, vx)
+                        _set_axis_value(new_prompt, axis_y, vy)
+                        _set_axis_value(new_prompt, axis_z, vz)
 
                         xyz_payload = {
                             "source_unique_id": unique_id,
@@ -596,8 +661,8 @@ class ArtifyXYZPlot(io.ComfyNode):
                         queued += 1
                 else:
                     new_prompt = copy.deepcopy(prompt)
-                    _set_axis_value(new_prompt, input_x, vx)
-                    _set_axis_value(new_prompt, input_y, vy)
+                    _set_axis_value(new_prompt, axis_x, vx)
+                    _set_axis_value(new_prompt, axis_y, vy)
 
                     xyz_payload = {
                         "source_unique_id": unique_id,
