@@ -3,18 +3,10 @@ import { api } from "/scripts/api.js";
 
 const NODE_ID = "ArtifyXYZViewer";
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif"]);
-
-function getWidget(node, name) {
-  return node.widgets?.find((widget) => widget.name === name) || null;
-}
-
-function getWidgetInt(node, name, fallback = 0) {
-  const value = Number(getWidget(node, name)?.value);
-  return Number.isFinite(value) ? Math.floor(value) : fallback;
-}
+const Y_LABEL_COL_WIDTH = 72;
 
 function getActiveFolderName(node) {
-  return String(node.artifyLoadedFolder || getWidget(node, "folder_name")?.value || "").trim();
+  return String(node.artifyLoadedFolder || "").trim();
 }
 
 function isImageName(name) {
@@ -88,12 +80,11 @@ function ensureStyles() {
       flex: 1 1 auto;
       min-height: 0;
       overflow: auto;
-      padding-right: 2px;
     }
 
     .artify-xyz-flat-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(var(--artify-cell-size, 120px), 1fr));
       gap: 8px;
     }
 
@@ -116,7 +107,7 @@ function ensureStyles() {
     .artify-xyz-item img {
       display: block;
       width: 100%;
-      height: 120px;
+      height: var(--artify-cell-size, 120px);
       object-fit: cover;
       background: #11161e;
     }
@@ -141,13 +132,33 @@ function ensureStyles() {
       min-width: 100%;
     }
 
+    .artify-xyz-y-col {
+      width: ${Y_LABEL_COL_WIDTH}px;
+      min-width: ${Y_LABEL_COL_WIDTH}px;
+      max-width: ${Y_LABEL_COL_WIDTH}px;
+    }
+
+    .artify-xyz-img-col {
+      width: var(--artify-cell-size, 120px);
+      min-width: var(--artify-cell-size, 120px);
+      max-width: var(--artify-cell-size, 120px);
+    }
+
     .artify-xyz-table th,
     .artify-xyz-table td {
       border: 1px solid #354255;
       background: #1e2530;
-      padding: 6px;
       text-align: center;
       vertical-align: middle;
+    }
+
+    .artify-xyz-table th {
+      padding: 6px;
+    }
+
+    .artify-xyz-table td {
+      padding: 0;
+      overflow: hidden;
     }
 
     .artify-xyz-table thead th {
@@ -163,6 +174,22 @@ function ensureStyles() {
       text-overflow: ellipsis;
     }
 
+    .artify-xyz-col-head {
+      width: var(--artify-cell-size, 120px);
+      min-width: var(--artify-cell-size, 120px);
+      max-width: var(--artify-cell-size, 120px);
+      padding: 4px 2px;
+      font-size: 10px;
+    }
+
+    .artify-xyz-y-col-head {
+      width: ${Y_LABEL_COL_WIDTH}px;
+      min-width: ${Y_LABEL_COL_WIDTH}px;
+      max-width: ${Y_LABEL_COL_WIDTH}px;
+      padding: 4px 4px;
+      font-size: 10px;
+    }
+
     .artify-xyz-table tbody th {
       position: sticky;
       left: 0;
@@ -170,32 +197,41 @@ function ensureStyles() {
       background: #232c3a;
       color: #d8e1ec;
       font-size: 11px;
-      max-width: 220px;
+      width: ${Y_LABEL_COL_WIDTH}px;
+      min-width: ${Y_LABEL_COL_WIDTH}px;
+      max-width: ${Y_LABEL_COL_WIDTH}px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
 
+    .artify-xyz-img-td {
+      width: var(--artify-cell-size, 120px);
+      min-width: var(--artify-cell-size, 120px);
+      max-width: var(--artify-cell-size, 120px);
+      height: var(--artify-cell-size, 120px);
+      min-height: var(--artify-cell-size, 120px);
+      max-height: var(--artify-cell-size, 120px);
+    }
+
     .artify-xyz-cell {
-      width: 120px;
-      height: 120px;
+      width: 100%;
+      height: 100%;
       display: block;
       object-fit: cover;
       background: #0f141c;
-      border-radius: 4px;
     }
 
     .artify-xyz-missing {
-      width: 120px;
-      height: 120px;
+      width: 100%;
+      height: 100%;
       display: grid;
       place-items: center;
       color: #8fa2b7;
       font-size: 11px;
-      border: 1px dashed #455569;
-      border-radius: 4px;
       background: #151b24;
     }
+
   `;
 
   document.head.appendChild(style);
@@ -261,21 +297,41 @@ function getAxesInfo(data) {
   return { xCount, yCount, zCount, batchCount, hasZAxis };
 }
 
-function getCellImageEntry(data, ix, iy, zIndex, batchIndex) {
-  const xNode = data?.result?.[ix];
-  const yNode = xNode?.children?.[iy];
-  const cell = Array.isArray(yNode?.children) ? yNode.children : [];
-  if (!cell.length) return null;
+function getAutoCellSize(node) {
+  const content = node?.artifyContentEl;
+  const width = Math.max(200, Math.floor(content?.clientWidth || node?.size?.[0] || 700));
+  const height = Math.max(160, Math.floor(content?.clientHeight || node?.size?.[1] || 500));
 
-  const isZAxis = cell[0]?.type === "axis";
-  if (isZAxis) {
-    const zNode = cell[Math.min(Math.max(zIndex, 0), cell.length - 1)] || cell[0];
-    const images = Array.isArray(zNode?.children) ? zNode.children : [];
-    if (!images.length) return null;
-    return images[Math.min(Math.max(batchIndex, 0), images.length - 1)] || images[0] || null;
+  if (node?.artifyViewMode === "matrix" && node?.artifyGridData) {
+    const axes = getAxesInfo(node.artifyGridData);
+    const cols = Math.max(1, axes.xCount * (axes.hasZAxis ? axes.zCount : 1));
+    const rows = Math.max(1, axes.yCount);
+
+    const labelColumnWidth = Y_LABEL_COL_WIDTH;
+    const headerHeight = axes.hasZAxis ? 58 : 36;
+    const perCellHorizontalChrome = 14;
+    const perCellVerticalChrome = 14;
+
+    const usableW = Math.max(120, width - labelColumnWidth);
+    const usableH = Math.max(120, height - headerHeight);
+
+    const byWidth = Math.floor(usableW / cols) - perCellHorizontalChrome;
+    const rowBudget = Math.floor(usableH / rows) - perCellVerticalChrome;
+    const byHeight = rowBudget;
+
+    return Math.max(32, Math.min(byWidth, byHeight));
   }
 
-  return cell[Math.min(Math.max(batchIndex, 0), cell.length - 1)] || cell[0] || null;
+  const imageCount = Math.max(1, node?.artifyFlatImages?.length || 1);
+  const cols = Math.max(1, Math.ceil(Math.sqrt(imageCount)));
+  const rows = Math.max(1, Math.ceil(imageCount / cols));
+  const gap = 8;
+  const labelHeight = 24;
+
+  const byWidth = Math.floor((width - gap * (cols - 1)) / cols);
+  const byHeight = Math.floor((height - gap * (rows - 1)) / rows) - labelHeight;
+
+  return Math.max(48, Math.min(byWidth, byHeight > 0 ? byHeight : byWidth));
 }
 
 function buildLocalImageMap(node, files) {
@@ -376,8 +432,7 @@ function renderMatrixGrid(node, data) {
     return;
   }
 
-  const zIndex = getWidgetInt(node, "z_index", 0);
-  const batchIndex = getWidgetInt(node, "batch_index", 0);
+  const batchIndex = 0;
 
   content.replaceChildren();
 
@@ -387,19 +442,70 @@ function renderMatrixGrid(node, data) {
   const table = document.createElement("table");
   table.className = "artify-xyz-table";
 
-  const thead = document.createElement("thead");
-  const headerRow = document.createElement("tr");
+  const hasZAxis = axes.hasZAxis;
+  const imageColCount = axes.xCount * (hasZAxis ? axes.zCount : 1);
 
-  const corner = document.createElement("th");
-  corner.textContent = "Y \\ X";
-  headerRow.appendChild(corner);
-
-  for (let ix = 0; ix < axes.xCount; ix += 1) {
-    const th = document.createElement("th");
-    th.textContent = String(data.result[ix]?.value ?? `x${ix}`);
-    headerRow.appendChild(th);
+  const colgroup = document.createElement("colgroup");
+  const yCol = document.createElement("col");
+  yCol.className = "artify-xyz-y-col";
+  colgroup.appendChild(yCol);
+  for (let i = 0; i < imageColCount; i += 1) {
+    const col = document.createElement("col");
+    col.className = "artify-xyz-img-col";
+    colgroup.appendChild(col);
   }
-  thead.appendChild(headerRow);
+  table.appendChild(colgroup);
+
+  const thead = document.createElement("thead");
+
+  if (hasZAxis) {
+    const topRow = document.createElement("tr");
+    const corner = document.createElement("th");
+    corner.className = "artify-xyz-y-col-head";
+    corner.textContent = "Y \\ X / Z";
+    corner.title = corner.textContent;
+    corner.rowSpan = 2;
+    topRow.appendChild(corner);
+
+    for (let ix = 0; ix < axes.xCount; ix += 1) {
+      const xTh = document.createElement("th");
+      xTh.colSpan = axes.zCount;
+      xTh.textContent = String(data.result[ix]?.value ?? `x${ix}`);
+      topRow.appendChild(xTh);
+    }
+    thead.appendChild(topRow);
+
+    const zRow = document.createElement("tr");
+    for (let ix = 0; ix < axes.xCount; ix += 1) {
+      const firstCell = data.result[ix]?.children?.[0]?.children || [];
+      for (let iz = 0; iz < axes.zCount; iz += 1) {
+        const zTh = document.createElement("th");
+        zTh.className = "artify-xyz-col-head";
+        const zNode = firstCell[iz];
+        zTh.textContent = String(zNode?.value ?? `z${iz}`);
+        zTh.title = zTh.textContent;
+        zRow.appendChild(zTh);
+      }
+    }
+    thead.appendChild(zRow);
+  } else {
+    const headerRow = document.createElement("tr");
+    const corner = document.createElement("th");
+    corner.className = "artify-xyz-y-col-head";
+    corner.textContent = "Y \\ X";
+    corner.title = corner.textContent;
+    headerRow.appendChild(corner);
+
+    for (let ix = 0; ix < axes.xCount; ix += 1) {
+      const th = document.createElement("th");
+      th.className = "artify-xyz-col-head";
+      th.textContent = String(data.result[ix]?.value ?? `x${ix}`);
+      th.title = th.textContent;
+      headerRow.appendChild(th);
+    }
+    thead.appendChild(headerRow);
+  }
+
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
@@ -408,29 +514,60 @@ function renderMatrixGrid(node, data) {
     const tr = document.createElement("tr");
 
     const yLabel = document.createElement("th");
+    yLabel.className = "artify-xyz-y-col-head";
     yLabel.textContent = String(data.result[0]?.children?.[iy]?.value ?? `y${iy}`);
+    yLabel.title = yLabel.textContent;
     tr.appendChild(yLabel);
 
     for (let ix = 0; ix < axes.xCount; ix += 1) {
-      const td = document.createElement("td");
-      const entry = getCellImageEntry(data, ix, iy, zIndex, batchIndex);
-      const src = resolveImageSrc(node, entry);
+      const xNode = data?.result?.[ix];
+      const yNode = xNode?.children?.[iy];
+      const cell = Array.isArray(yNode?.children) ? yNode.children : [];
+      const cellHasZAxis = cell.length > 0 && cell[0]?.type === "axis";
 
-      if (src) {
-        const img = document.createElement("img");
-        img.className = "artify-xyz-cell";
-        img.loading = "lazy";
-        img.src = src;
-        img.alt = getImageFilename(entry) || `${ix},${iy}`;
-        td.appendChild(img);
+      if (cellHasZAxis) {
+        for (let iz = 0; iz < axes.zCount; iz += 1) {
+          const td = document.createElement("td");
+          td.className = "artify-xyz-img-td";
+          const zNode = cell[iz];
+          const zImages = Array.isArray(zNode?.children) ? zNode.children : [];
+          const entry = zImages[Math.min(Math.max(batchIndex, 0), Math.max(0, zImages.length - 1))] || zImages[0] || null;
+          const src = resolveImageSrc(node, entry);
+          if (src) {
+            const img = document.createElement("img");
+            img.className = "artify-xyz-cell";
+            img.loading = "lazy";
+            img.src = src;
+            img.alt = getImageFilename(entry) || `${ix},${iy},${iz}`;
+            td.appendChild(img);
+          } else {
+            const missing = document.createElement("div");
+            missing.className = "artify-xyz-missing";
+            missing.textContent = "Missing";
+            td.appendChild(missing);
+          }
+          tr.appendChild(td);
+        }
       } else {
-        const missing = document.createElement("div");
-        missing.className = "artify-xyz-missing";
-        missing.textContent = "Missing";
-        td.appendChild(missing);
+        const td = document.createElement("td");
+        td.className = "artify-xyz-img-td";
+        const entry = cell[Math.min(Math.max(batchIndex, 0), Math.max(0, cell.length - 1))] || cell[0] || null;
+        const src = resolveImageSrc(node, entry);
+        if (src) {
+          const img = document.createElement("img");
+          img.className = "artify-xyz-cell";
+          img.loading = "lazy";
+          img.src = src;
+          img.alt = getImageFilename(entry) || `${ix},${iy}`;
+          td.appendChild(img);
+        } else {
+          const missing = document.createElement("div");
+          missing.className = "artify-xyz-missing";
+          missing.textContent = "Missing";
+          td.appendChild(missing);
+        }
+        tr.appendChild(td);
       }
-
-      tr.appendChild(td);
     }
 
     tbody.appendChild(tr);
@@ -442,6 +579,11 @@ function renderMatrixGrid(node, data) {
 }
 
 function renderCurrentView(node) {
+  if (node?.artifyRootEl) {
+    const cellSize = getAutoCellSize(node);
+    node.artifyRootEl.style.setProperty("--artify-cell-size", `${cellSize}px`);
+  }
+
   if (node?.artifyViewMode === "matrix" && node?.artifyGridData) {
     renderMatrixGrid(node, node.artifyGridData);
   } else {
@@ -451,10 +593,8 @@ function renderCurrentView(node) {
 
 function statusForMatrix(node, folderLabel) {
   const axes = getAxesInfo(node.artifyGridData);
-  const zIndex = Math.min(getWidgetInt(node, "z_index", 0), Math.max(0, axes.zCount - 1));
-  const batchIndex = Math.min(getWidgetInt(node, "batch_index", 0), Math.max(0, axes.batchCount - 1));
-  const zText = axes.hasZAxis ? `, z=${zIndex}` : "";
-  return `${folderLabel} (${axes.xCount} x ${axes.yCount}, batch=${batchIndex}${zText})`;
+  const zText = axes.hasZAxis ? `, z=all(${axes.zCount})` : "";
+  return `${folderLabel} (${axes.xCount} x ${axes.yCount}${zText})`;
 }
 
 function applyResultData(node, resultData, folderLabel) {
@@ -523,7 +663,7 @@ async function applyLocalFiles(node, files, folderLabel) {
 async function loadServerFolder(node, folderName) {
   const folder = String(folderName || "").trim();
   if (!folder) {
-    setStatus(node, "Set folder_name or use Load Folder.");
+    setStatus(node, "Use Load Folder.");
     renderEmptyState(node, "No folder selected.");
     return false;
   }
@@ -665,6 +805,7 @@ app.registerExtension({
       this.artifyViewMode = "flat";
       this.artifyFlatImages = [];
       this.artifyGridData = null;
+      this._artifyResizeRaf = null;
 
       if (!this.artifyDomWidget) {
         const { root, status, content } = createViewerContainer();
@@ -680,69 +821,26 @@ app.registerExtension({
         this.artifyDomWidget.computeSize = (width) => [Math.max(500, width), 440];
       }
 
+      if (!this.artifyResizeObserver && typeof ResizeObserver !== "undefined") {
+        this.artifyResizeObserver = new ResizeObserver(() => {
+          if (this._artifyResizeRaf != null) {
+            cancelAnimationFrame(this._artifyResizeRaf);
+          }
+          this._artifyResizeRaf = requestAnimationFrame(() => {
+            renderCurrentView(this);
+            if (this.artifyViewMode === "matrix" && this.artifyGridData) {
+              setStatus(this, statusForMatrix(this, this.artifyLoadedFolder || "selected folder"));
+            }
+          });
+        });
+        this.artifyResizeObserver.observe(this.artifyRootEl);
+      }
+
       if (!this.widgets?.some((widget) => widget.name === "Load Folder")) {
         this.addWidget("button", "Load Folder", "", () => {
           void promptForFolder(this);
         });
       }
-
-      if (!this.widgets?.some((widget) => widget.name === "Reload Grid")) {
-        this.addWidget("button", "Reload Grid", "", () => {
-          if (Array.isArray(this.artifyLastLocalFiles) && this.artifyLastLocalFiles.length > 0) {
-            void applyLocalFiles(this, this.artifyLastLocalFiles, this.artifyLoadedFolder || "selected folder");
-            return;
-          }
-
-          const folder = getActiveFolderName(this);
-          if (folder) {
-            void loadServerFolder(this, folder);
-          }
-        });
-      }
-
-      const folderWidget = getWidget(this, "folder_name");
-      if (folderWidget) {
-        const original = folderWidget.callback;
-        folderWidget.callback = function (...args) {
-          const ret = original?.apply(this, args);
-          if (String(getWidget(this, "source_mode")?.value || "") === "load_folder") {
-            const folder = String(folderWidget.value || "").trim();
-            if (folder) {
-              void loadServerFolder(this, folder);
-            }
-          }
-          return ret;
-        }.bind(this);
-      }
-
-      const sourceModeWidget = getWidget(this, "source_mode");
-      if (sourceModeWidget) {
-        const original = sourceModeWidget.callback;
-        sourceModeWidget.callback = function (...args) {
-          const ret = original?.apply(this, args);
-          if (String(sourceModeWidget.value || "") === "load_folder") {
-            const folder = getActiveFolderName(this);
-            if (folder) {
-              void loadServerFolder(this, folder);
-            }
-          }
-          return ret;
-        }.bind(this);
-      }
-
-      const redrawWidgets = new Set(["z_index", "batch_index"]);
-      this.widgets?.forEach((widget) => {
-        if (!redrawWidgets.has(widget.name)) return;
-        const original = widget.callback;
-        widget.callback = function (...args) {
-          const ret = original?.apply(this, args);
-          if (this.artifyViewMode === "matrix" && this.artifyGridData) {
-            renderCurrentView(this);
-            setStatus(this, statusForMatrix(this, this.artifyLoadedFolder || "selected folder"));
-          }
-          return ret;
-        }.bind(this);
-      });
 
       const size = this.computeSize();
       this.setSize([Math.max(size[0], 760), Math.max(size[1], 620)]);
@@ -755,11 +853,8 @@ app.registerExtension({
 
       const folderFromUi = String(message?.plot_folder?.[0] || "").trim();
       if (folderFromUi) {
-        const sourceMode = getWidget(this, "source_mode");
-        if (!sourceMode || String(sourceMode.value || "") === "from_plot_output") {
-          this.artifyLoadedFolder = folderFromUi;
-          void loadServerFolder(this, folderFromUi);
-        }
+        this.artifyLoadedFolder = folderFromUi;
+        void loadServerFolder(this, folderFromUi);
       }
 
       return result;
@@ -767,6 +862,14 @@ app.registerExtension({
 
     const originalOnRemoved = nodeType.prototype.onRemoved;
     nodeType.prototype.onRemoved = function () {
+      if (this.artifyResizeObserver) {
+        this.artifyResizeObserver.disconnect();
+        this.artifyResizeObserver = null;
+      }
+      if (this._artifyResizeRaf != null) {
+        cancelAnimationFrame(this._artifyResizeRaf);
+        this._artifyResizeRaf = null;
+      }
       revokeObjectUrls(this);
       return originalOnRemoved?.apply(this, arguments);
     };

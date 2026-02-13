@@ -188,10 +188,7 @@ def _prepare_viewer_refresh_prompt(
     for viewer_id in viewer_ids:
         viewer_node = _ensure_prompt_node(new_prompt, viewer_id)
         inputs = viewer_node.setdefault("inputs", {})
-        # Force viewer to read directly from folder so this prompt does not depend
-        # on an upstream xyz_plot link.
-        inputs["source_mode"] = "load_folder"
-        inputs["folder_name"] = folder_name
+        # Force viewer to read directly from folder metadata.
         inputs["xyz_plot"] = plot_data
 
     return new_prompt
@@ -283,14 +280,6 @@ def _write_result_json(folder_path: str, payload: dict[str, Any]) -> None:
     result_path = os.path.join(folder_path, "result.json")
     with open(result_path, "w", encoding="utf-8") as file:
         json.dump(payload, file, ensure_ascii=False, indent=2)
-
-
-def _resolve_folder_name(source_mode: str, xyz_plot: Any, folder_name: str) -> str:
-    if source_mode == "from_plot_output" and isinstance(xyz_plot, dict):
-        incoming = xyz_plot.get("folder_name")
-        if isinstance(incoming, str) and incoming.strip():
-            return _sanitize_folder_name(incoming)
-    return _sanitize_folder_name(folder_name)
 
 
 def _collect_plot_meta(folder_path: str) -> dict[str, Any]:
@@ -745,29 +734,9 @@ class ArtifyXYZViewer(io.ComfyNode):
             node_id="ArtifyXYZViewer",
             display_name="XYZ Viewer (Artify)",
             category=CATEGORY,
-            description=(
-                "Displays an XYZ result grid inside the node. Use source_mode=from_plot_output for live runs, "
-                "or source_mode=load_folder to open an existing result folder."
-            ),
+            description="Displays an XYZ result grid inside the node.",
             inputs=[
-                io.Combo.Input("source_mode", options=["from_plot_output", "load_folder"], default="from_plot_output"),
                 XYZ_PLOT_DATA.Input("xyz_plot", optional=True),
-                io.String.Input(
-                    "folder_name",
-                    default="",
-                    placeholder="Existing output subfolder that contains result.json",
-                    optional=True,
-                ),
-                io.Int.Input("z_index", default=0, min=0, max=999, step=1),
-                io.Int.Input("batch_index", default=0, min=0, max=999, step=1),
-                io.Int.Input("cell_size", default=224, min=64, max=768, step=16),
-                io.Int.Input("padding", default=12, min=0, max=48, step=1),
-                io.Boolean.Input("show_labels", default=True),
-                io.Boolean.Input(
-                    "export_merged_grid",
-                    default=False,
-                    tooltip="When enabled, generates the merged grid image output. Keep disabled for fast in-node browsing.",
-                ),
             ],
             outputs=[
                 io.Image.Output("grid_image"),
@@ -786,36 +755,32 @@ class ArtifyXYZViewer(io.ComfyNode):
     @classmethod
     def execute(
         cls,
-        source_mode: str,
-        z_index: int,
-        batch_index: int,
-        cell_size: int,
-        padding: int,
-        show_labels: bool,
-        export_merged_grid: bool,
         xyz_plot: dict[str, Any] | None = None,
-        folder_name: str = "",
     ) -> io.NodeOutput:
-        resolved_folder = _resolve_folder_name(source_mode, xyz_plot, folder_name)
+        resolved_folder = ""
+        if isinstance(xyz_plot, dict):
+            incoming = xyz_plot.get("folder_name")
+            if isinstance(incoming, str) and incoming.strip():
+                resolved_folder = _sanitize_folder_name(incoming)
+
+        # If this node runs without an upstream xyz_plot, keep it non-fatal.
+        if not resolved_folder:
+            return io.NodeOutput(
+                _empty_image_tensor(),
+                xyz_plot if isinstance(xyz_plot, dict) else {},
+                ui={"plot_folder": []},
+            )
+
         folder_path = _output_folder_path(resolved_folder)
 
         if not os.path.isdir(folder_path):
-            raise ValueError(f"XYZ folder does not exist: {folder_path}")
+            return io.NodeOutput(
+                _empty_image_tensor(),
+                {"folder_name": resolved_folder, "folder_path": folder_path},
+                ui={"plot_folder": [resolved_folder]},
+            )
 
         plot_meta = _collect_plot_meta(folder_path)
-        grid_tensor = _empty_image_tensor()
-        if export_merged_grid:
-            grid_image = _render_grid(
-                folder_name=resolved_folder,
-                folder_path=folder_path,
-                plot_meta=plot_meta,
-                z_index=z_index,
-                batch_index=batch_index,
-                cell_size=cell_size,
-                padding=padding,
-                show_labels=show_labels,
-            )
-            grid_tensor = _pil_to_image_tensor(grid_image)
 
         plot_data = {
             "folder_name": resolved_folder,
@@ -828,7 +793,7 @@ class ArtifyXYZViewer(io.ComfyNode):
         }
 
         return io.NodeOutput(
-            grid_tensor,
+            _empty_image_tensor(),
             plot_data,
             ui={
                 "plot_folder": [resolved_folder],
