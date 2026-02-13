@@ -738,10 +738,7 @@ class ArtifyXYZViewer(io.ComfyNode):
             inputs=[
                 XYZ_PLOT_DATA.Input("xyz_plot", optional=True),
             ],
-            outputs=[
-                io.Image.Output("grid_image"),
-                XYZ_PLOT_DATA.Output("xyz_plot"),
-            ],
+            outputs=[],
             is_output_node=True,
             not_idempotent=True,
             search_aliases=["xyz viewer", "grid viewer", "parameter sweep viewer"],
@@ -765,20 +762,12 @@ class ArtifyXYZViewer(io.ComfyNode):
 
         # If this node runs without an upstream xyz_plot, keep it non-fatal.
         if not resolved_folder:
-            return io.NodeOutput(
-                _empty_image_tensor(),
-                xyz_plot if isinstance(xyz_plot, dict) else {},
-                ui={"plot_folder": []},
-            )
+            return io.NodeOutput(ui={"plot_folder": []})
 
         folder_path = _output_folder_path(resolved_folder)
 
         if not os.path.isdir(folder_path):
-            return io.NodeOutput(
-                _empty_image_tensor(),
-                {"folder_name": resolved_folder, "folder_path": folder_path},
-                ui={"plot_folder": [resolved_folder]},
-            )
+            return io.NodeOutput(ui={"plot_folder": [resolved_folder]})
 
         plot_meta = _collect_plot_meta(folder_path)
 
@@ -793,10 +782,8 @@ class ArtifyXYZViewer(io.ComfyNode):
         }
 
         return io.NodeOutput(
-            _empty_image_tensor(),
-            plot_data,
             ui={
                 "plot_folder": [resolved_folder],
                 "plot_data": [json.dumps(plot_data)],
-            },
+            }
         )
